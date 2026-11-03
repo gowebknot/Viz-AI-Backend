@@ -68,7 +68,7 @@ def _extract_enum_map(connection, db_type: str, **kwargs) -> Dict[str, List[str]
     Dispatcher that extracts enum/constrained-value columns for the given db_type.
 
     Returns a dict whose keys are either:
-      - The enum type name (PostgreSQL, e.g. "unit_status")
+      - "table.column" and "schema.table.column" (PostgreSQL)
       - A "table.column" composite key (MySQL / Oracle, e.g. "units.status")
 
     Values are the ordered list of allowed string literals.
@@ -78,18 +78,41 @@ def _extract_enum_map(connection, db_type: str, **kwargs) -> Dict[str, List[str]
         db_lower = (db_type or "").lower()
 
         if db_lower in ("postgres", "postgresql", "pg"):
+            # Key by table and column. SQLAlchemy often reports these columns
+            # as USER-DEFINED or ENUM, so the type name is not in that string.
             rows = connection.execute(text(
                 """
-                SELECT t.typname AS enum_type, e.enumlabel AS label
-                FROM pg_type t
-                JOIN pg_enum e ON t.oid = e.enumtypid
-                ORDER BY t.typname, e.enumsortorder
+                SELECT n.nspname AS schema_name,
+                       c.relname AS table_name,
+                       a.attname AS column_name,
+                       e.enumlabel AS label
+                FROM pg_attribute a
+                JOIN pg_class c ON c.oid = a.attrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_type t ON t.oid = a.atttypid
+                JOIN pg_enum e ON e.enumtypid = t.oid
+                WHERE a.attnum > 0
+                  AND NOT a.attisdropped
+                  AND c.relkind IN ('r', 'p', 'f')
+                  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY n.nspname, c.relname, a.attname, e.enumsortorder
                 """
             )).mappings().all()
-            result: Dict[str, List[str]] = {}
+            grouped: Dict[str, List[str]] = {}
             for row in rows:
-                key = str(row["enum_type"]).lower()
-                result.setdefault(key, []).append(str(row["label"]))
+                schema_name = str(row["schema_name"]).lower()
+                table_name = str(row["table_name"]).lower()
+                column_name = str(row["column_name"]).lower()
+                label = str(row["label"])
+                qualified = f"{schema_name}.{table_name}.{column_name}"
+                grouped.setdefault(qualified, []).append(label)
+            result: Dict[str, List[str]] = {}
+            for qualified, labels in grouped.items():
+                result[qualified] = labels
+                _schema, table_name, column_name = qualified.split(".", 2)
+                unqualified = f"{table_name}.{column_name}"
+                # Keep the first schema when the same table.column exists in two schemas.
+                result.setdefault(unqualified, labels)
             return result
 
         elif db_lower in ("mysql",):
@@ -478,12 +501,16 @@ def get_schema_structure(connection_string: str, queue, loop):
                                 "name": col["name"],
                                 "type": col_type_str,
                             }
-                            # PostgreSQL: match column type string against enum type name keys
+                            # PostgreSQL: labels are keyed by table.column from pg_catalog.
                             if _db_type_for_enum == "postgres":
-                                for enum_type_name, enum_labels in enum_map.items():
-                                    if enum_type_name.lower() in col_type_str.lower():
-                                        col_entry["enum_values"] = enum_labels
-                                        break
+                                bare_table = table_name.split(".")[-1]
+                                enum_labels = enum_map.get(
+                                    f"{table_name}.{col['name']}".lower()
+                                ) or enum_map.get(
+                                    f"{bare_table}.{col['name']}".lower()
+                                )
+                                if enum_labels:
+                                    col_entry["enum_values"] = enum_labels
                             else:
                                 # MySQL / Oracle: match on "table_name.col_name" composite key
                                 tbl_col_key = f"{table_name}.{col['name']}".lower()

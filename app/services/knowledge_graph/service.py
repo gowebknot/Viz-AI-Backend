@@ -21,7 +21,9 @@ from sqlalchemy.orm import Session
 from app.models.knowledge_graph_models import DocumentKnowledgeGraphModel
 from app.services.knowledge_graph.extractor import extract_knowledge_graph
 from app.services.knowledge_graph import neo4j_client
+from app.services.knowledge_graph import rag_store
 from app.services.knowledge_graph.schemas import (
+    DocumentRetrieveResponse,
     KnowledgeGraphDeleteResponse,
     KnowledgeGraphDetailResponse,
     KnowledgeGraphListItem,
@@ -184,6 +186,23 @@ async def upload_knowledge_graph(
 
     logger.info("KG created %s: %d nodes, %d edges", row.id,
                 graph["stats"]["node_count"], graph["stats"]["edge_count"])
+
+    # RAG index is additive: graph UI must still succeed if embed/pgvector fails.
+    try:
+        rag_store.index_document(
+            db,
+            user_id=UUID(user_id_str),
+            graph_id=row.id,
+            file_path=row.file_path,
+            mime=mime,
+        )
+    except Exception:
+        logger.exception(
+            "RAG index failed; graph upload still succeeds | user_id=%s graph_id=%s",
+            user_id_str,
+            row.id,
+        )
+
     return KnowledgeGraphUploadResponse(graph_id=row.id)
 
 
@@ -333,4 +352,25 @@ async def query_knowledge_graph(
         question=cleaned,
         context=context,
         subgraph=KnowledgeGraphQuerySubgraph(nodes=nodes, edges=edges),
+    )
+
+
+# ── Retrieve (pgvector RAG → SQL document context) ─────────────────────────────
+
+async def retrieve_document_context(
+    question: str,
+    db: Session,
+    token_payload: dict,
+) -> DocumentRetrieveResponse:
+    """Return top-k document chunks for SQL generation. Empty if none / embed fails."""
+    user_id = UUID(_user_id_str(token_payload))
+    result = rag_store.retrieve_for_question(
+        db,
+        user_id=user_id,
+        question=question,
+    )
+    return DocumentRetrieveResponse(
+        question=result.get("question") or (question or "").strip(),
+        context=result.get("context") or "",
+        chunks=result.get("chunks") or [],
     )

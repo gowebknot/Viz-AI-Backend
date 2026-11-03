@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.services.knowledge_graph.schemas import (
+    DocumentRetrieveResponse,
     KnowledgeGraphDeleteResponse,
     KnowledgeGraphDetailResponse,
     KnowledgeGraphListResponse,
@@ -48,6 +49,21 @@ async def query_knowledge_graph(
     token_payload: dict = Depends(get_current_user),
 ):
     return await kg_service.query_knowledge_graph(body.question, token_payload)
+
+
+@knowledge_graph_router.post(
+    "/retrieve",
+    response_model=DocumentRetrieveResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def retrieve_document_context(
+    body: KnowledgeGraphQueryRequest,
+    db: Session = Depends(get_db),
+    token_payload: dict = Depends(get_current_user),
+):
+    return await kg_service.retrieve_document_context(
+        body.question, db, token_payload
+    )
 
 
 @knowledge_graph_router.get(
