@@ -85,3 +85,16 @@ class KnowledgeGraphQueryResponse(BaseModel):
     question: str
     context: str
     subgraph: KnowledgeGraphQuerySubgraph
+
+
+class DocumentRetrieveChunk(BaseModel):
+    page_start: int = 1
+    page_end: int = 1
+    content: str
+    distance: Optional[float] = None
+
+
+class DocumentRetrieveResponse(BaseModel):
+    question: str
+    context: str
+    chunks: List[DocumentRetrieveChunk] = Field(default_factory=list)

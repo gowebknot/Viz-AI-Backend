@@ -98,6 +98,7 @@ orjson==3.11.5
 ormsgpack==1.12.2
 packaging==24.2
 pandas==2.2.3
+pgvector==0.4.1
 passlib==1.7.4
 platformdirs==4.7.0
 prompt_toolkit==3.0.51

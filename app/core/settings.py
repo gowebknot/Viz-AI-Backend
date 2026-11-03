@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     REDIS_URL: Optional[str] = None
     EMBED_SERVER_SECRET: Optional[str] = None  # Used for HMAC-signing embed tokens; falls back to SECRET_KEY
     EMBED_JWT_EXPIRE_MINUTES: int = 30  # Stateless embed session JWT lifetime
+    # RAG (pgvector) — document chunks for SQL generation
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    VECTOR_DIM: int = 1536
+    RAG_TOP_K: int = 5
 
     class Config:
         """

@@ -159,6 +159,35 @@ async def _call_llm_service(
     return data
 
 
+def extract_page_texts(file_path: str, mime_type: str) -> List[Dict[str, Any]]:
+    """
+    Per-page (or per-doc) text for RAG chunking.
+
+    Do not reuse the 5-page KG LLM chunks — those discard raw sentences after
+    entity extraction. RAG needs the actual page text.
+    """
+    if mime_type == "application/pdf":
+        from pypdf import PdfReader
+
+        reader = PdfReader(file_path)
+        pages: List[Dict[str, Any]] = []
+        for index, page in enumerate(reader.pages, start=1):
+            try:
+                text = page.extract_text() or ""
+            except Exception:
+                text = ""
+            if text.strip():
+                pages.append({"page_start": index, "page_end": index, "text": text})
+        return pages
+    if mime_type in (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    ):
+        chunks, _page_count = _extract_docx_chunks(file_path)
+        return [c for c in chunks if (c.get("text") or "").strip()]
+    raise ValueError(f"Unsupported file type: {mime_type}")
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def extract_knowledge_graph(file_path: str, mime_type: str) -> Dict[str, Any]:
