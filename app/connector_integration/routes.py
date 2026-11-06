@@ -26,7 +26,6 @@ from app.connector_integration.schemas import (
     InstanceInfo,
     RotateTokenResponse,
 )
-from app.connector_integration.tokens import connection_code
 from app.core.db import get_db
 from app.models.schema_models import DatabaseConnectionModel, ExternalConnectorModel
 from app.utils.access import check_access
@@ -132,7 +131,6 @@ async def create_connector(
         gatewayAddress=gateway_host.public_gateway_address(),
         dialect=service.DEFAULT_DIALECT,
         token=created.token,
-        connectionCode=connection_code(gateway_host.public_gateway_address(), str(created.connector.id), created.token),
         install=gateway_host.install_info(),
     )
 
@@ -178,7 +176,6 @@ async def rotate_token(
         connectorId=str(connector.id),
         gatewayAddress=gateway_host.public_gateway_address(),
         token=token,
-        connectionCode=connection_code(gateway_host.public_gateway_address(), str(connector.id), token),
         install=gateway_host.install_info(),
     )
 

@@ -7,7 +7,7 @@ from app.connector_integration.install_info import InvalidInstallSettings, build
 
 def test_normal_settings():
     info = build_install_info("https://downloads.vizai.ai/connector/", "0.6.0", None)
-    assert info == {"downloadUrl": "https://downloads.vizai.ai/connector", "version": "0.6.0", "env": []}
+    assert info == {"downloadUrl": "https://downloads.vizai.ai/connector", "version": "0.6.0", "image": "vizai/connector:0.6.0", "env": []}
 
 
 def test_local_testing_settings():
@@ -31,3 +31,14 @@ def test_unsafe_versions_are_refused(version):
 def test_unsafe_environment_entries_are_refused(env):
     with pytest.raises(InvalidInstallSettings):
         build_install_info("https://x.example", "0.6.0", env)
+
+
+def test_the_image_can_come_from_a_private_registry():
+    info = build_install_info("https://x.example", "0.7.0", None, "registry.example.com:5000/vizai/connector")
+    assert info["image"] == "registry.example.com:5000/vizai/connector:0.7.0"
+
+
+@pytest.mark.parametrize("image", ["", "vizai/connector:latest", "Vizai/Connector", "a b", "$(id)", "a;b", "a/", "https://x/y"])
+def test_unsafe_images_are_refused(image):
+    with pytest.raises(InvalidInstallSettings):
+        build_install_info("https://x.example", "0.7.0", None, image)

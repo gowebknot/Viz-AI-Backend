@@ -40,9 +40,12 @@ def public_gateway_address() -> str:
 
 
 def install_info() -> dict:
-    """The install screen's download URL, version and extra environment (validated: see install_info.py)."""
+    """The install screen's download URL, image, version and extra environment (validated: see install_info.py)."""
     return build_install_info(
-        settings.CONNECTOR_DOWNLOAD_URL, settings.CONNECTOR_RELEASE_VERSION, settings.CONNECTOR_INSTALL_ENV
+        settings.CONNECTOR_DOWNLOAD_URL,
+        settings.CONNECTOR_RELEASE_VERSION,
+        settings.CONNECTOR_INSTALL_ENV,
+        settings.CONNECTOR_IMAGE,
     )
 
 

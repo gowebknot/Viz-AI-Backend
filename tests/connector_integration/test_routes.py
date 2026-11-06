@@ -85,8 +85,8 @@ class TestCreate:
         r = create(client, project)
         assert r.status_code == 201
         body = r.json()
-        assert set(body) == {"connectorId", "connectionId", "taskId", "gatewayAddress", "dialect", "token", "connectionCode", "install"}
-        assert set(body["install"]) == {"downloadUrl", "version", "env"} and body["install"]["version"] == "0.6.0"
+        assert set(body) == {"connectorId", "connectionId", "taskId", "gatewayAddress", "dialect", "token", "install"}
+        assert set(body["install"]) == {"downloadUrl", "version", "image", "env"} and body["install"]["image"] == "vizai/connector:0.7.0"
         assert body["token"].startswith("vzc_") and body["dialect"] == "postgres"
         assert body["gatewayAddress"] == "localhost:50051"
         assert r.headers["cache-control"] == "no-store"
@@ -98,7 +98,7 @@ class TestCreate:
         assert service.authenticate(db, body["connectorId"], body["token"]).ok
         for url in (f"{BASE}/{body['connectorId']}", f"{BASE}/projects/{project.id}"):
             shown = client.get(url).text
-            assert body["token"] not in shown and body["connectionCode"] not in shown
+            assert body["token"] not in shown
         progress.forget(body["connectorId"])
 
     def test_a_duplicate_name_is_rejected(self, client, project):
@@ -150,7 +150,7 @@ class TestRotateAndRevoke:
         assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
         new = r.json()["token"]
         assert new != body["token"]
-        assert r.json()["connectionCode"] != body["connectionCode"] and r.json()["install"]["version"] == "0.6.0"
+        assert r.json()["token"] != body["token"] and r.json()["install"]["image"] == "vizai/connector:0.7.0"
         assert r.json()["gatewayAddress"] == body["gatewayAddress"]
         assert not service.authenticate(db, cid, body["token"]).ok and service.authenticate(db, cid, new).ok
         assert gateway.disconnected == [(cid, "token rotated")]

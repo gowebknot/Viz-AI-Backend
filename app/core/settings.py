@@ -41,11 +41,13 @@ class Settings(BaseSettings):
     CONNECTOR_GATEWAY_METRICS_PORT: Optional[int] = None
     # The address clients put in their connector settings (what they dial), e.g. connect.vizai.ai:443
     CONNECTOR_PUBLIC_GATEWAY_ADDRESS: Optional[str] = None
-    # What the install screen tells a client to run (used to build the command shown in the UI).
+    # What the install screen tells a client to run (used to build the settings shown in the UI).
+    # CONNECTOR_IMAGE: the connector image without a tag; CONNECTOR_RELEASE_VERSION is the tag.
     # CONNECTOR_INSTALL_ENV: extra VIZAI_* settings for the client's command, comma-separated, for
     # local testing only, e.g. VIZAI_TLS_CA_FILE=/path/to/ca.pem
     CONNECTOR_DOWNLOAD_URL: str = "https://downloads.vizai.ai/connector"
-    CONNECTOR_RELEASE_VERSION: str = "0.6.0"
+    CONNECTOR_IMAGE: str = "vizai/connector"
+    CONNECTOR_RELEASE_VERSION: str = "0.7.0"
     CONNECTOR_INSTALL_ENV: Optional[str] = None
     # Most rows one connector query may return (the agent has its own cap, VIZAI_MAX_ROWS; the lower
     # one wins). A result over the cap is returned cut off, with "truncated": true. 0 = gateway default.

@@ -14,10 +14,11 @@ class CreateConnectorRequest(BaseModel):
 
 
 class InstallInfo(BaseModel):
-    """What the client needs to build its install command."""
+    """What the install screen needs to build the client's container settings."""
 
     downloadUrl: str
     version: str
+    image: str  # the connector image with its version, e.g. vizai/connector:0.7.0
     env: list[str] = []  # extra VIZAI_NAME=value settings to put before the command (local testing)
 
 
@@ -29,8 +30,6 @@ class CreateConnectorResponse(BaseModel):
     dialect: str
     # Shown once. VizAI keeps only a hash, so it cannot be shown again; rotate to get a new one.
     token: str
-    # Gateway address, connector id and token in one value, for the install script. Also shown once.
-    connectionCode: str
     install: InstallInfo
 
 
@@ -38,7 +37,6 @@ class RotateTokenResponse(BaseModel):
     connectorId: str
     gatewayAddress: str
     token: str
-    connectionCode: str
     install: InstallInfo
 
 

@@ -1,6 +1,5 @@
-import base64
 
-from app.connector_integration.tokens import TOKEN_PREFIX, connection_code, hash_token, new_token, token_matches
+from app.connector_integration.tokens import TOKEN_PREFIX, hash_token, new_token, token_matches
 
 
 def test_tokens_are_random_prefixed_and_long():
@@ -19,12 +18,3 @@ def test_a_wrong_or_empty_token_does_not_match():
     stored = hash_token(new_token())
     assert not token_matches(new_token(), stored)
     assert not token_matches("", stored)
-
-
-def test_connection_code_holds_the_three_values_connect_sh_expects():
-    token = new_token()
-    code = connection_code("connect.example.com:443", "3809f5a8-aa96-457e-8d41-c08d0096b086", token)
-    assert code.startswith("vzc1.") and "=" not in code
-    encoded = code.removeprefix("vzc1.")
-    decoded = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
-    assert decoded.split("|") == ["connect.example.com:443", "3809f5a8-aa96-457e-8d41-c08d0096b086", token]
