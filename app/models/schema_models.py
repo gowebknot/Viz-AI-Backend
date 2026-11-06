@@ -392,7 +392,8 @@ class DatabaseConnectionModel(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     connection_name = Column(String, nullable=False)
-    db_connection_string = Column(Text, nullable=False)
+    # NULL for connector datasources: VizAI never holds the client's database login there.
+    db_connection_string = Column(Text, nullable=True)
     db_schema = Column(String, nullable=True)
     ds_graph_json = Column(Text, nullable=True)
     db_username = Column(String, nullable=True)
@@ -404,6 +405,16 @@ class DatabaseConnectionModel(Base):
     consent_given = Column(Boolean, nullable=True, default=False)
     status = Column(Boolean, nullable=True,default=False)
     last_checked = Column(DateTime, nullable=True)
+    # "direct": VizAI opens the database itself (the connection string above).
+    # "connector": a connector agent in the client's network runs the queries (see
+    # app/connector_integration). db_type stays the real dialect in both modes.
+    connection_mode = Column(String(16), nullable=False, default="direct", server_default="direct")
+    connector_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("external_connector.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     project = relationship("ProjectModel", back_populates="database_connections")
 
@@ -443,6 +454,34 @@ class DatabaseConnectionModel(Base):
             f"<DatabaseConnectionModel(id={self.id}, connection_name={self.connection_name}, "
             f"db_type={self.db_type})>"
         )
+
+
+class ExternalConnectorModel(Base):
+    """
+    A connector agent that runs in a client's network and dials out to the gateway.
+
+    VizAI keeps only a SHA-256 hash of the connector's token (shown once at creation) and
+    never any database credentials. status: "offline" | "online" | "revoked".
+    """
+
+    __tablename__ = "external_connector"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("project.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    token_hash = Column(String(64), nullable=False)
+    status = Column(String(16), nullable=False, default="offline", server_default="offline")
+    dialect = Column(String, nullable=True)
+    agent_version = Column(String, nullable=True)
+    protocol_version = Column(String, nullable=True)
+    schema_hash = Column(String, nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    revoked_at = Column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<ExternalConnectorModel(id={self.id}, name={self.name}, status={self.status})>"
 
 
 class ConnectionTableNameModel(Base):

@@ -18,6 +18,7 @@ from app.models.schema_models import (
     UserProjectRoleModel,
     RolePermissionModel,
     UserModel,
+    DatabaseConnectionModel,
 )
 
 from app.schemas import ValidateChartAccessRequest
@@ -150,6 +151,50 @@ async def check_access(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
         ) from e
+
+
+def ensure_datasource_access(
+    db: Session, token_payload: dict, datasource_connection_id: UUID
+) -> None:
+    """The caller must be a super user or belong to the project that owns the datasource.
+
+    A datasource that does not exist passes here, so the query path answers for it as it always has.
+    Raises HTTPException 401 (bad token), 404 (unknown user) or 403 (not in the project).
+    """
+    try:
+        user_id = UUID((token_payload or {}).get("sub"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload"
+        ) from exc
+
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if user.is_super:
+        return
+
+    datasource = (
+        db.query(DatabaseConnectionModel)
+        .filter(DatabaseConnectionModel.id == datasource_connection_id)
+        .first()
+    )
+    if datasource is None:
+        return
+
+    member = (
+        db.query(UserProjectRoleModel)
+        .filter(
+            UserProjectRoleModel.user_id == user_id,
+            UserProjectRoleModel.project_id == datasource.project_id,
+        )
+        .first()
+    )
+    if member is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User does not have access to this datasource",
+        )
 
 
 def require_permission(permission_key: str):

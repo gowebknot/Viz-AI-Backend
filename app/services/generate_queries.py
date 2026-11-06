@@ -63,6 +63,10 @@ except ImportError:
     SALESFORCE_AVAILABLE = False
 
 
+from app.services.query_executor import ConnectorSqlFailed, is_connector_row
+from app.services.query_executor import run_sync as run_connector_query
+
+
 # celery -A app.utils.tasks.celery_app worker --loglevel=info
 # celery -A app.utils.tasks.celery_app worker --loglevel=info
 async def post_to_llm(url: str, payload: dict) -> Any:
@@ -97,7 +101,15 @@ async def generate_and_store_charts(
             detail="No database connection found for this project or db connection not found",
         )
 
-    decrypt_conn_string = decrypt_string(db_conn.db_connection_string)
+    # A connector row has no connection string, and its rows stay with the client: the LLM gets
+    # the schema only (plan section 10, question 3).
+    is_connector = is_connector_row(db_conn)
+    if is_connector and not db_conn.db_schema:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The connector has not sent its database structure yet.",
+        )
+    decrypt_conn_string = None if is_connector else decrypt_string(db_conn.db_connection_string)
 
     user_id_str = token_payload.get("sub")
     if not user_id_str:
@@ -113,7 +125,7 @@ async def generate_and_store_charts(
             detail="Invalid UUID format in token",
         )
     sample_data = None
-    if db_conn.consent_given:
+    if db_conn.consent_given and not is_connector:
         sample_data = get_sample_data(decrypt_conn_string)
     db_schema = json.loads(db_conn.db_schema)
     logger.debug(f"Processing database connection: {db_conn.connection_name}, type: {db_conn.db_type}")
@@ -372,6 +384,9 @@ def execute_external_query(
             detail="Datasource Connection ID doesn't exist",
         )
 
+    if is_connector_row(db_connection):
+        return execute_via_connector(db_connection, query, response_format, x_axis, y_axis)
+
     decrypt_conn_string = decrypt_string(db_connection.db_connection_string)
 
     # Handle Salesforce queries separately
@@ -466,6 +481,55 @@ def execute_external_query(
     finally:
         session.close()
         # Engine is managed by external_engine_manager, no dispose() needed
+
+
+def execute_via_connector(
+    db_connection,
+    query: str,
+    response_format: str,
+    x_axis: Optional[str],
+    y_axis: Optional[str],
+) -> Dict[str, Any]:
+    """execute_external_query for a connector datasource: same response shapes as the direct path,
+    plus "truncated": True when the result hit the connector's row or size limit."""
+    try:
+        outcome = run_connector_query(db_connection, query)
+    except ConnectorSqlFailed as e:
+        logger.warning("Connector query failed for connection %s", db_connection.id)
+        return {"error": str(e)}
+
+    raw_rows = outcome.as_dicts()
+    if response_format == "tabular":
+        tabular_result = [_json_safe_row(r) for r in raw_rows]
+        meta_x = x_axis
+        meta_y = y_axis
+        if tabular_result and (meta_x is None or meta_y is None):
+            keys = list(tabular_result[0].keys())
+            if meta_x is None and keys:
+                meta_x = keys[0]
+            if meta_y is None and len(keys) > 1:
+                # Prefer first numeric column after x for primary measure
+                for k in keys[1:]:
+                    v = tabular_result[0].get(k)
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        meta_y = k
+                        break
+                if meta_y is None:
+                    meta_y = keys[1]
+        response = {"result": tabular_result, "x_axis": meta_x, "y_axis": meta_y}
+    else:
+        try:
+            transformed_data = transform_data_dynamic(raw_rows)
+        except ValueError as e:
+            return {"error": str(e)}
+        response = {
+            "result": transformed_data["data"],
+            "x_axis": transformed_data["x_axis"],
+            "y_axis": transformed_data["y_axis"],
+        }
+    if outcome.truncated:
+        response["truncated"] = True
+    return response
 
 
 def transform_data_dynamic(data):

@@ -6,6 +6,7 @@ use dependency injection for DB session and user authentication.
 
 from uuid import UUID
 from typing import Optional
+import asyncio
 import traceback
 import logging
 
@@ -160,6 +161,8 @@ from app.services.project_insights import (
     get_latest_business_insight_service,
 )
 
+from app.services.query_executor import ConnectorQueryError
+from app.utils.access import ensure_datasource_access
 from app.services.generate_queries import (
     generate_and_store_charts,
     execute_external_query,
@@ -253,6 +256,11 @@ async def add_database_connection(
     """
     return await create_database_connection(project_id, token_payload, data, db,background_tasks)
 
+async def _wait_for_disconnect(ws: WebSocket) -> None:
+    while (await ws.receive())["type"] != "websocket.disconnect":
+        pass
+
+
 @backend_router.websocket("/ws/progress/{task_id}")
 async def ws_progress(ws: WebSocket, task_id: str):
     await ws.accept()
@@ -261,15 +269,29 @@ async def ws_progress(ws: WebSocket, task_id: str):
         await ws.send_json({"type": "error", "message": "Invalid taskId"})
         await ws.close()
         return
+    # Wait for the next message or the client leaving, whichever comes first. A connector's task can
+    # wait days for the client to install, and a handler stuck on the queue alone would never notice
+    # the client leaving, and would hang the server's shutdown. The queue stays registered, so a
+    # reloaded page can subscribe again and nothing is lost.
+    gone = asyncio.ensure_future(_wait_for_disconnect(ws))
+    getter = None
     try:
         while True:
-            msg = await queue.get()
+            getter = asyncio.ensure_future(queue.get())
+            await asyncio.wait({getter, gone}, return_when=asyncio.FIRST_COMPLETED)
+            if not getter.done():
+                logger.debug(f"Client disconnected from task {task_id}")
+                break
+            msg = getter.result()
             if msg is None:
                 break  # worker finished
             await ws.send_json(msg)
     except WebSocketDisconnect:
         logger.debug(f"Client disconnected from task {task_id}")
     finally:
+        gone.cancel()
+        if getter is not None and not getter.done():
+            getter.cancel()
         try:
             await ws.close()
         except:
@@ -1183,6 +1205,8 @@ def execute_query(
     Returns:
         dict: Query execution result.
     """
+    # Only people in the datasource's project may query it. Outside the try below, so a 403 stays a 403.
+    ensure_datasource_access(db, token_payload, datasource_connection_id)
     try:
         return execute_external_query(
             db=db,
@@ -1195,6 +1219,10 @@ def execute_query(
             x_axis=request.x_axis,
             y_axis=request.y_axis,
         )
+    except ConnectorQueryError:
+        # Keep its status (503 offline, 504 timeout, 429 busy, ...): the catch-all below would make it a 500.
+        raise
+
     except SQLAlchemyError as e:
         # Explicitly re-raise the exception with context
         raise HTTPException(

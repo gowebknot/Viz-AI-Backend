@@ -903,6 +903,30 @@ async def get_connections(
 
         connections_list = []
         for conn in connections:
+            if conn.connection_mode == "connector":
+                # A connector datasource has no credentials: VizAI never holds the client's
+                # database login, so there is nothing to decrypt. Same keys as below.
+                connections_list.append(
+                    {
+                        "id": str(conn.id),
+                        "project_id": str(conn.project_id),
+                        "db_connection_string": None,
+                        "db_schema": conn.db_schema,
+                        "ds_graph_json": conn.ds_graph_json,
+                        "db_username": None,
+                        "db_password": None,
+                        "db_host_link": None,
+                        "db_name": None,
+                        "db_type": conn.db_type,
+                        "name": conn.connection_name,
+                        "consent_given": conn.consent_given,
+                        "has_ds_graph": bool(conn.ds_graph_json),
+                        "connection_mode": "connector",
+                        "connector_id": str(conn.connector_id) if conn.connector_id else None,
+                        "status": conn.status,
+                    }
+                )
+                continue
             if conn.db_type == "spreadsheet":
                 decrypted_password = conn.db_password
                 decrypted_connection_string = conn.db_connection_string
@@ -969,6 +993,22 @@ async def update_db_connection(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Database connection not found",
+        )
+
+    # A connector row never holds credentials, and its db_type stays the real dialect.
+    if db_connection.connection_mode == "connector" and any(
+        (
+            data.db_connection_string,
+            data.db_username,
+            data.db_password,
+            data.db_host_link,
+            data.db_name,
+            data.db_type,
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A connector datasource has no connection details to change.",
         )
 
     if data.connection_name:
@@ -1272,6 +1312,24 @@ async def _test_single_connection(
 
     test_engine = None
     try:
+        # A connector datasource has no engine to open: its agent dials out to the gateway, so
+        # "connected" means an agent instance is connected right now.
+        if connection.connection_mode == "connector":
+            from app.connector_integration.gateway_host import get_gateway
+
+            gateway = get_gateway()
+            online = bool(gateway and connection.connector_id and gateway.is_online(str(connection.connector_id)))
+            connection.status = online
+            connection.last_checked = current_time
+            db.commit()
+            return {
+                "connection_id": connection_id,
+                "connection_name": connection_name,
+                "status": online,
+                "last_checked": current_time.isoformat(),
+                "error_message": None if online else "Connector is offline (no agent is connected)",
+            }
+
         # Handle Salesforce connections differently
         if connection.db_type == "salesforce":
             if not SALESFORCE_AVAILABLE:
