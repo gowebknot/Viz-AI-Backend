@@ -29,6 +29,11 @@ from app.models.schema_models import (
     UserProjectRoleModel,
 )
 from app.services.allowed_domains import get_allowed_domains_list
+from app.services.query_executor import (
+    ConnectorSqlFailed,
+    is_connector_row,
+    run_async as run_connector_query,
+)
 from app.services.app_service import normalize_domain
 from app.utils.embed_jwt import (
     decode_embed_jwt_for_refresh,
@@ -648,6 +653,111 @@ def _build_date_filtered_query(
     )
 
 
+async def _connector_infer_date_column(connection, chart) -> Optional[str]:
+    """The first column of the chart's query, when the chart has no stored x_axis."""
+    clean_query = chart.query.strip().rstrip(";")
+    probe = await run_connector_query(
+        connection, f"SELECT * FROM ({clean_query}) AS _embed_infer_subq LIMIT 1"
+    )
+    return probe.column_names[0] if probe.column_names else None
+
+
+async def _connector_embed_chart_data(
+    connection,
+    chart,
+    chart_id: UUID,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> dict:
+    """get_embed_chart_data_by_dashboard for a connector datasource, with the same response."""
+    wants_date_filter = bool(start_date) and bool(end_date)
+    try:
+        date_col = chart.x_axis
+        if wants_date_filter and not date_col:
+            date_col = await _connector_infer_date_column(connection, chart)
+
+        sql_to_run = chart.query
+        apply_date_filter = wants_date_filter and bool(date_col)
+        if apply_date_filter:
+            start_date_val = _validate_iso_date(start_date, "start_date")
+            end_date_val = _validate_iso_date(end_date, "end_date")
+            # The gateway takes SQL text with no bind parameters. These two values are safe to
+            # inline: _validate_iso_date returned them as YYYY-MM-DD.
+            sql_to_run = (
+                _build_date_filtered_query(
+                    base_query=chart.query,
+                    date_column=date_col,
+                    db_type=connection.db_type,
+                    start_date=start_date_val,
+                    end_date=end_date_val,
+                )
+                .replace(":start_date", f"'{start_date_val}'")
+                .replace(":end_date", f"'{end_date_val}'")
+            )
+        outcome = await run_connector_query(connection, sql_to_run)
+    except ConnectorSqlFailed as e:
+        logger.error(f"[EMBED] Connector chart query FAILED for chart {str(chart_id)[:8]}...")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch chart data",
+        ) from e
+
+    response = {
+        "success": True,
+        "data": [_json_safe_row(row) for row in outcome.as_dicts()],
+        "chart_id": str(chart_id),
+        "chart_type": chart.chart_type,
+        "title": chart.title,
+        "x_axis": chart.x_axis,
+        "y_axis": chart.y_axis,
+        "is_time_based": chart.is_time_based,
+    }
+    if outcome.truncated:
+        response["truncated"] = True
+    return response
+
+
+async def _connector_embed_date_range(connection, chart) -> dict:
+    """get_embed_chart_date_range for a connector datasource, with the same response.
+
+    The expressions are the Postgres ones: the agent supports Postgres only for now.
+    """
+    date_col = chart.x_axis
+    try:
+        if not date_col:
+            date_col = await _connector_infer_date_column(connection, chart)
+        if not date_col:
+            return {
+                "min_date": None,
+                "max_date": None,
+                "date_column": None,
+                "is_time_based": bool(chart.is_time_based),
+            }
+        clean_query = chart.query.strip().rstrip(";")
+        outcome = await run_connector_query(
+            connection,
+            f'SELECT MIN("{date_col}"::date) AS min_date, MAX("{date_col}"::date) AS max_date '
+            f'FROM ({clean_query}) AS _embed_range_subq',
+        )
+    except ConnectorSqlFailed:
+        # Like the direct path: a date range that cannot be worked out is not an error.
+        return {"min_date": None, "max_date": None, "date_column": date_col, "is_time_based": True}
+
+    min_date = None
+    max_date = None
+    if outcome.rows:
+        raw_min, raw_max = outcome.rows[0][0], outcome.rows[0][1]
+        if raw_min is not None:
+            min_date = _json_safe_value(raw_min)
+            if isinstance(min_date, str) and "T" in min_date:
+                min_date = min_date[:10]
+        if raw_max is not None:
+            max_date = _json_safe_value(raw_max)
+            if isinstance(max_date, str) and "T" in max_date:
+                max_date = max_date[:10]
+    return {"min_date": min_date, "max_date": max_date, "date_column": date_col, "is_time_based": True}
+
+
 async def get_embed_chart_data_by_dashboard(
     dashboard_id: UUID,
     chart_id: UUID,
@@ -699,6 +809,9 @@ async def get_embed_chart_data_by_dashboard(
             detail="Database connection not found",
         )
     
+    if is_connector_row(connection):
+        return await _connector_embed_chart_data(connection, chart, chart_id, start_date, end_date)
+
     date_col = chart.x_axis
     apply_date_filter_intent = bool(start_date) and bool(end_date)
 
@@ -881,6 +994,9 @@ async def get_embed_chart_date_range(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Database connection not found",
         )
+
+    if is_connector_row(connection):
+        return await _connector_embed_date_range(connection, chart)
 
     date_col = chart.x_axis
     db_type   = (connection.db_type or "").lower()

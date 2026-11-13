@@ -30,6 +30,7 @@ from app.ontology_schemas import (
 from app.utils.constants import LLM_ONTOLOGY_URL
 from sqlalchemy import create_engine, inspect
 from app.utils.crypt import decrypt_string
+from app.services.query_executor import is_connector_row, saved_physical_schema
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -64,6 +65,9 @@ def _fetch_physical_schema(db: Session, datasource_id: uuid.UUID) -> dict:
     conn = db.query(DatabaseConnectionModel).filter(DatabaseConnectionModel.id == datasource_id).first()
     if not conn:
         raise HTTPException(status_code=404, detail="Database connection not found.")
+
+    if is_connector_row(conn):
+        return saved_physical_schema(conn)
     
     try:
         decrypted_url = decrypt_string(conn.db_connection_string)

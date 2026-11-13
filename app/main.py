@@ -21,6 +21,7 @@ from app.routes.observability import observability_router
 from app.routes.ontology import router as ontology_router
 from app.routes.knowledge_graph import knowledge_graph_router
 from app.services.knowledge_graph import neo4j_keepalive
+from app.connector_integration.gateway_host import gateway_enabled, start_gateway, stop_gateway
 from app.utils.constants import (
     ALLOWED_ORIGINS,
     ALLOWED_CREDENTIALS,
@@ -59,9 +60,11 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting VizAI Backend...")
     neo4j_keepalive.start()
+    await start_gateway()  # no-op unless CONNECTOR_GATEWAY_ENABLED=true
     yield
     # Shutdown
     logger.info("Shutting down VizAI Backend...")
+    await stop_gateway()
     await neo4j_keepalive.stop()
     from app.core.db import external_engine_manager, engine
     external_engine_manager.dispose_all()
@@ -98,6 +101,10 @@ app.include_router(allowed_domains_router)  # Include allowed domains endpoints
 app.include_router(observability_router)    # Include observability endpoints
 app.include_router(ontology_router, prefix="/api/v1/ontology", tags=["Data Ontology Explorer"])
 app.include_router(knowledge_graph_router)  # PDF knowledge graphs
+if gateway_enabled():
+    from app.connector_integration.routes import connector_router
+
+    app.include_router(connector_router)  # client connector onboarding
 
 # Embedded dashboard ECharts bundle (built via VIZ-AI-FRONTEND `npm run build:embed`)
 _embed_static_dir = os.path.join(os.path.dirname(__file__), "static", "embed")

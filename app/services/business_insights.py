@@ -30,6 +30,14 @@ from app.models.schema_models import (
 )
 from app.utils.crypt import decrypt_string
 from app.core.settings import settings
+from app.services.query_executor import (
+    ConnectorQueryError,
+    ConnectorSqlFailed,
+    ensure_online as ensure_connector_online,
+    is_connector_row,
+    require_direct,
+    run_async as run_connector_query,
+)
 import os
 
 logger = logging.getLogger(__name__)
@@ -237,6 +245,8 @@ async def extract_database_schema(db_connection: DatabaseConnectionModel) -> Dic
     Returns:
         dict: Schema information with tables and columns
     """
+    require_direct(db_connection, "Reading the live database structure")
+
     try:
         # Decrypt the connection string before using it
         decrypted_connection_string = decrypt_string(db_connection.db_connection_string)
@@ -564,6 +574,9 @@ async def execute_kpi_queries(
     Returns:
         list: Query results with KPI data
     """
+    if is_connector_row(db_connection):
+        return await _execute_kpi_queries_via_connector(db_connection, queries)
+
     try:
         # Decrypt the connection string before using it
         decrypted_connection_string = decrypt_string(db_connection.db_connection_string)
@@ -632,6 +645,37 @@ async def execute_kpi_queries(
             status_code=500,
             detail=f"Failed to execute KPI queries: {str(e)}"
         ) from e
+
+
+async def _execute_kpi_queries_via_connector(
+    db_connection: DatabaseConnectionModel,
+    queries: List[Dict[str, str]],
+) -> List[Dict[str, Any]]:
+    """execute_kpi_queries for a connector datasource: same result entries as the direct path."""
+    ensure_connector_online(db_connection)
+
+    async def run_one(kpi: Dict[str, str]) -> Dict[str, Any]:
+        base = {
+            "kpi_title": kpi["kpi_title"],
+            "description": kpi["description"],
+            "query": kpi["sql_query"],
+        }
+        try:
+            outcome = await run_connector_query(db_connection, kpi["sql_query"])
+        except (ConnectorSqlFailed, ConnectorQueryError) as query_error:
+            message = getattr(query_error, "detail", None) or str(query_error)
+            logger.warning("Connector KPI query failed for connection %s", db_connection.id)
+            return {**base, "success": False, "error": message, "data": [], "row_count": 0}
+        rows = [
+            {
+                key: value if value is None or isinstance(value, (int, float, str, bool)) else str(value)
+                for key, value in row.items()
+            }
+            for row in outcome.as_dicts()
+        ]
+        return {**base, "success": True, "data": rows, "row_count": len(rows)}
+
+    return list(await asyncio.gather(*[run_one(kpi) for kpi in queries]))
 
 
 async def generate_insights_from_results(
